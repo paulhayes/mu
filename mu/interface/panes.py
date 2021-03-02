@@ -26,19 +26,39 @@ import signal
 import string
 import bisect
 import os.path
-from PyQt5.QtCore import (Qt, QProcess, QProcessEnvironment, pyqtSignal,
-                          QTimer, QUrl)
+from PyQt5.QtCore import (
+    Qt,
+    QProcess,
+    QProcessEnvironment,
+    pyqtSignal,
+    QTimer,
+    QUrl,
+)
 from collections import deque
-from PyQt5.QtWidgets import (QMessageBox, QTextEdit, QFrame, QListWidget,
-                             QGridLayout, QLabel, QMenu, QApplication,
-                             QTreeView)
-from PyQt5.QtGui import (QKeySequence, QTextCursor, QCursor, QPainter,
-                         QDesktopServices, QStandardItem)
+from PyQt5.QtWidgets import (
+    QMessageBox,
+    QTextEdit,
+    QFrame,
+    QListWidget,
+    QGridLayout,
+    QLabel,
+    QMenu,
+    QApplication,
+    QTreeView,
+)
+from PyQt5.QtGui import (
+    QKeySequence,
+    QTextCursor,
+    QCursor,
+    QPainter,
+    QDesktopServices,
+    QStandardItem,
+)
 from qtconsole.rich_jupyter_widget import RichJupyterWidget
 from mu import language_code
 from mu.interface.themes import Font
 from mu.interface.themes import DEFAULT_FONT_SIZE
-
+from mu.contrib import microfs
 
 logger = logging.getLogger(__name__)
 
@@ -47,19 +67,19 @@ CHARTS = True
 try:  # pragma: no cover
     from PyQt5.QtChart import QChart, QLineSeries, QChartView, QValueAxis
 except ImportError:  # pragma: no cover
-    logger.info('Unable to find QChart. Plotter button will not display.')
+    logger.info("Unable to find QChart. Plotter button will not display.")
     QChartView = object
     CHARTS = False
 
 
 PANE_ZOOM_SIZES = {
-    'xs': 8,
-    's': 10,
-    'm': 14,
-    'l': 16,
-    'xl': 18,
-    'xxl': 24,
-    'xxxl': 28,
+    "xs": 8,
+    "s": 10,
+    "m": 14,
+    "l": 16,
+    "xl": 18,
+    "xxl": 24,
+    "xxxl": 28,
 }
 
 
@@ -72,7 +92,7 @@ class JupyterREPLPane(RichJupyterWidget):
 
     on_append_text = pyqtSignal(bytes)
 
-    def __init__(self, theme='day', parent=None):
+    def __init__(self, theme="day", parent=None):
         super().__init__(parent)
         self.set_theme(theme)
         self.console_height = 10
@@ -82,7 +102,7 @@ class JupyterREPLPane(RichJupyterWidget):
         Ensures appended text is emitted as a signal with associated bytes.
         """
         super()._append_plain_text(text, *args, **kwargs)
-        self.on_append_text.emit(text.encode('utf-8'))
+        self.on_append_text.emit(text.encode("utf-8"))
 
     def set_font_size(self, new_size=DEFAULT_FONT_SIZE):
         """
@@ -102,10 +122,10 @@ class JupyterREPLPane(RichJupyterWidget):
         """
         Sets the theme / look for the REPL pane.
         """
-        if theme == 'contrast':
-            self.set_default_style(colors='nocolor')
-        elif theme == 'night':
-            self.set_default_style(colors='nocolor')
+        if theme == "contrast":
+            self.set_default_style(colors="nocolor")
+        elif theme == "night":
+            self.set_default_style(colors="nocolor")
         else:
             self.set_default_style()
 
@@ -115,6 +135,17 @@ class JupyterREPLPane(RichJupyterWidget):
         within this widget.
         """
         self._control.setFocus()
+
+
+VT100_RETURN = b"\r"
+VT100_BACKSPACE = b"\b"
+VT100_DELETE = b"\x1B[\x33\x7E"
+VT100_UP = b"\x1B[A"
+VT100_DOWN = b"\x1B[B"
+VT100_RIGHT = b"\x1B[C"
+VT100_LEFT = b"\x1B[D"
+VT100_HOME = b"\x1B[H"
+VT100_END = b"\x1B[F"
 
 
 class MicroPythonREPLPane(QTextEdit):
@@ -127,7 +158,7 @@ class MicroPythonREPLPane(QTextEdit):
     The device MUST be flashed with MicroPython for this to work.
     """
 
-    def __init__(self, serial, theme='day', parent=None):
+    def __init__(self, serial, theme="day", parent=None):
         super().__init__(parent)
         self.serial = serial
         self.setFont(Font().load())
@@ -136,8 +167,13 @@ class MicroPythonREPLPane(QTextEdit):
         self.setUndoRedoEnabled(False)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self.context_menu)
-        self.setObjectName('replpane')
+        # The following variable maintains the position where we know
+        # the device cursor is placed. It is initialized to the beginning
+        # of the QTextEdit (i.e. equal to the Qt cursor position)
+        self.device_cursor_position = self.textCursor().position()
+        self.setObjectName("replpane")
         self.set_theme(theme)
+        self.unprocessed_input = b""  # used by process_bytes
 
     def paste(self):
         """
@@ -145,16 +181,17 @@ class MicroPythonREPLPane(QTextEdit):
         """
         clipboard = QApplication.clipboard()
         if clipboard and clipboard.text():
-            to_paste = clipboard.text().replace('\n', '\r').\
-                replace('\r\r', '\r')
-            self.serial.write(bytes(to_paste, 'utf8'))
+            to_paste = (
+                clipboard.text().replace("\n", "\r").replace("\r\r", "\r")
+            )
+            self.serial.write(bytes(to_paste, "utf8"))
 
     def context_menu(self):
         """
         Creates custom context menu with just copy and paste.
         """
         menu = QMenu(self)
-        if platform.system() == 'Darwin':
+        if platform.system() == "Darwin":
             copy_keys = QKeySequence(Qt.CTRL + Qt.Key_C)
             paste_keys = QKeySequence(Qt.CTRL + Qt.Key_V)
         else:
@@ -168,119 +205,252 @@ class MicroPythonREPLPane(QTextEdit):
     def set_theme(self, theme):
         pass
 
+    def send(self, msg):
+        logger.debug("MicroPython REPL, writing to serial: {}".format(msg))
+        self.serial.write(msg)
+
     def keyPressEvent(self, data):
         """
         Called when the user types something in the REPL.
 
         Correctly encodes it and sends it to the connected device.
         """
+        tc = self.textCursor()
         key = data.key()
-        msg = bytes(data.text(), 'utf8')
-        if key == Qt.Key_Backspace:
-            msg = b'\b'
+        ctrl_only = data.modifiers() == Qt.ControlModifier
+        meta_only = data.modifiers() == Qt.MetaModifier
+        ctrl_shift_only = (
+            data.modifiers() == Qt.ControlModifier | Qt.ShiftModifier
+        )
+        shift_down = data.modifiers() & Qt.ShiftModifier
+        on_osx = platform.system() == "Darwin"
+
+        if key == Qt.Key_Return:
+            # Move cursor to the end of document before sending carriage return
+            tc.movePosition(QTextCursor.End, mode=QTextCursor.MoveAnchor)
+            self.device_cursor_position = tc.position()
+            self.send(VT100_RETURN)
+        elif key == Qt.Key_Backspace:
+            if not self.delete_selection():
+                self.send(VT100_BACKSPACE)
         elif key == Qt.Key_Delete:
-            msg = b'\x1B[\x33\x7E'
+            if not self.delete_selection():
+                self.send(VT100_DELETE)
         elif key == Qt.Key_Up:
-            msg = b'\x1B[A'
+            self.send(VT100_UP)
         elif key == Qt.Key_Down:
-            msg = b'\x1B[B'
+            self.send(VT100_DOWN)
         elif key == Qt.Key_Right:
-            msg = b'\x1B[C'
+            if shift_down:
+                # Text selection - pass down
+                super().keyPressEvent(data)
+            elif tc.hasSelection():
+                self.move_cursor_to(tc.selectionEnd())
+            else:
+                self.send(VT100_RIGHT)
         elif key == Qt.Key_Left:
-            msg = b'\x1B[D'
+            if shift_down:
+                # Text selection - pass down
+                super().keyPressEvent(data)
+            elif tc.hasSelection():
+                self.move_cursor_to(tc.selectionStart())
+            else:
+                self.send(VT100_LEFT)
         elif key == Qt.Key_Home:
-            msg = b'\x1B[H'
+            self.send(VT100_HOME)
         elif key == Qt.Key_End:
-            msg = b'\x1B[F'
-        elif (platform.system() == 'Darwin' and
-                data.modifiers() == Qt.MetaModifier) or \
-             (platform.system() != 'Darwin' and
-                data.modifiers() == Qt.ControlModifier):
+            self.send(VT100_END)
+        elif (on_osx and meta_only) or (not on_osx and ctrl_only):
             # Handle the Control key. On OSX/macOS/Darwin (python calls this
             # platform Darwin), this is handled by Qt.MetaModifier. Other
             # platforms (Linux, Windows) call this Qt.ControlModifier. Go
             # figure. See http://doc.qt.io/qt-5/qt.html#KeyboardModifier-enum
             if Qt.Key_A <= key <= Qt.Key_Z:
                 # The microbit treats an input of \x01 as Ctrl+A, etc.
-                msg = bytes([1 + key - Qt.Key_A])
-        elif (data.modifiers() == Qt.ControlModifier | Qt.ShiftModifier) or \
-                (platform.system() == 'Darwin' and
-                    data.modifiers() == Qt.ControlModifier):
+                self.send(bytes([1 + key - Qt.Key_A]))
+        elif ctrl_shift_only or (on_osx and ctrl_only):
             # Command-key on Mac, Ctrl-Shift on Win/Lin
             if key == Qt.Key_C:
                 self.copy()
-                msg = b''
             elif key == Qt.Key_V:
+                self.delete_selection()
                 self.paste()
-                msg = b''
-        self.serial.write(msg)
+        else:
+            self.delete_selection()
+            self.send(bytes(data.text(), "utf8"))
+
+    def set_qtcursor_to_devicecursor(self):
+        """
+        Resets the Qt TextCursor to where we know the device has the cursor
+        placed.
+        """
+        tc = self.textCursor()
+        tc.setPosition(self.device_cursor_position)
+        self.setTextCursor(tc)
+
+    def set_devicecursor_to_qtcursor(self):
+        """
+        Call this whenever the cursor has been moved by the user, to send
+        the cursor movement to the device.
+        """
+        self.move_cursor_to(self.textCursor().position())
+
+    def move_cursor_to(self, new_position):
+        """Move the cursor, by sending vt100 left/right signals through
+        serial. The Qt cursor is first returned to the known location
+        of the device cursor.  Then the appropriate number of move
+        left or right signals are send.  The Qt cursor is not moved to
+        the new_position here, but will be moved once receiving a
+        response (in process_bytes).
+        """
+        # Reset Qt cursor position
+        self.set_qtcursor_to_devicecursor()
+        # Calculate number of steps
+        steps = new_position - self.device_cursor_position
+        # Send the appropriate right/left moves
+        if steps > 0:
+            # Move cursor right if positive
+            self.send(VT100_RIGHT * steps)
+        elif steps < 0:
+            # Move cursor left if negative
+            self.send(VT100_LEFT * abs(steps))
+
+    def delete_selection(self):
+        """
+        Returns true if deletion happened, returns false if there was no
+        selection to delete.
+        """
+        tc = self.textCursor()
+        if tc.hasSelection():
+            # Calculate how much should be deleted (N)
+            selectionSize = tc.selectionEnd() - tc.selectionStart()
+            # Move cursor to end of selection
+            self.move_cursor_to(tc.selectionEnd())
+            # Send N backspaces
+            self.send(VT100_BACKSPACE * selectionSize)
+            return True
+        return False
+
+    def mouseReleaseEvent(self, mouseEvent):
+        """Called whenever a user have had a mouse button pressed, and
+        releases it. We pass it through to the normal way Qt handles
+        button pressed, but also sends as cursor movement signal to
+        the device (except if a selection is made, for selections we first
+        move the cursor on deselection)
+        """
+        super().mouseReleaseEvent(mouseEvent)
+
+        # If when a user have clicked and not made a selection
+        # move the device cursor to where the user clicked
+        if not self.textCursor().hasSelection():
+            self.set_devicecursor_to_qtcursor()
 
     def process_bytes(self, data):
         """
         Given some incoming bytes of data, work out how to handle / display
         them in the REPL widget.
+        If received input is incomplete, stores remainder in
+        self.unprocessed_input.
+
+        Updates the self.device_cursor_position to match that of the device
+        for every input received.
         """
-        tc = self.textCursor()
-        # The text cursor must be on the last line of the document. If it isn't
-        # then move it there.
-        while tc.movePosition(QTextCursor.Down):
-            pass
+        logger.debug(
+            "MicroPython REPL, received through serial: {}".format(data)
+        )
         i = 0
+        if len(self.unprocessed_input) > 0:
+            # Prepend bytes from last time, that wasn't processed
+            data = self.unprocessed_input + data
+            self.unprocessed_input = b""
+        print(data) # fm debug
+        # Reset cursor. E.g. if doing a selection, the qt cursor and
+        # device cursor will not match, we reset it here to make sure
+        # they do match (this removes any selections when new input is
+        # received)
+        self.set_qtcursor_to_devicecursor()
+        tc = self.textCursor()
+
         while i < len(data):
             if data[i] == 8:  # \b
                 tc.movePosition(QTextCursor.Left)
-                self.setTextCursor(tc)
+                self.device_cursor_position = tc.position()
             elif data[i] == 13:  # \r
+                # Carriage return. Do nothing, we handle newlines when
+                # reading \n
                 pass
-            elif len(data) > i + 1 and data[i] == 27 and data[i + 1] == 91:
-                # VT100 cursor detected: <Esc>[
-                i += 2  # move index to after the [
-                regex = r'(?P<count>[\d]*)(;?[\d]*)*(?P<action>[ABCDKm])'
-                m = re.search(regex, data[i:].decode('utf-8'))
-                if m:
-                    # move to (almost) after control seq
-                    # (will ++ at end of loop)
-                    i += m.end() - 1
-
-                    if m.group("count") == '':
-                        count = 1
+            elif data[i] == 27:
+                # Escape
+                if len(data) > i + 1 and data[i + 1] == 91:
+                    # VT100 cursor detected: <Esc>[
+                    regex = (
+                        r"\x1B\[(?P<count>[\d]*)(;?[\d]*)*(?P<action>[A-Za-z])"
+                    )
+                    match = re.search(regex, data[i:].decode("utf-8"))
+                    if match:
+                        # move to (almost) after control seq
+                        # (will ++ at end of loop)
+                        i += match.end() - 1
+                        count_string = match.group("count")
+                        count = 1 if count_string == "" else int(count_string)
+                        action = match.group("action")
+                        if action == "A":  # up
+                            tc.movePosition(QTextCursor.Up, n=count)
+                            self.device_cursor_position = tc.position()
+                        elif action == "B":  # down
+                            tc.movePosition(QTextCursor.Down, n=count)
+                            self.device_cursor_position = tc.position()
+                        elif action == "C":  # right
+                            tc.movePosition(QTextCursor.Right, n=count)
+                            self.device_cursor_position = tc.position()
+                        elif action == "D":  # left
+                            tc.movePosition(QTextCursor.Left, n=count)
+                            self.device_cursor_position = tc.position()
+                        elif action == "K":  # delete things
+                            if count_string == "":  # delete to end of line
+                                tc.movePosition(
+                                    QTextCursor.EndOfLine,
+                                    mode=QTextCursor.KeepAnchor,
+                                )
+                                tc.removeSelectedText()
+                                self.device_cursor_position = tc.position()
+                        else:
+                            # Unknown action, log warning and ignore
+                            command = match.group(0).replace("\x1B", "<Esc>")
+                            msg = "Received unsupported VT100 command: {}"
+                            logger.warning(msg.format(command))
                     else:
-                        count = int(m.group("count"))
-
-                    if m.group("action") == "A":  # up
-                        tc.movePosition(QTextCursor.Up, n=count)
-                        self.setTextCursor(tc)
-                    elif m.group("action") == "B":  # down
-                        tc.movePosition(QTextCursor.Down, n=count)
-                        self.setTextCursor(tc)
-                    elif m.group("action") == "C":  # right
-                        tc.movePosition(QTextCursor.Right, n=count)
-                        self.setTextCursor(tc)
-                    elif m.group("action") == "D":  # left
-                        tc.movePosition(QTextCursor.Left, n=count)
-                        self.setTextCursor(tc)
-                    elif m.group("action") == "K":  # delete things
-                        if m.group("count") == "":  # delete to end of line
-                            tc.movePosition(QTextCursor.EndOfLine,
-                                            mode=QTextCursor.KeepAnchor)
-                            tc.removeSelectedText()
-                            self.setTextCursor(tc)
-            elif data[i] == 10:  # \n
+                        # Cursor detected, but no match, must be
+                        # incomplete input
+                        self.unprocessed_input = data[i:]
+                        break
+                elif len(data) == i + 1:
+                    # Escape received as end of transmission. Perhaps
+                    # the transmission is incomplete, wait until next
+                    # bytes are received to determine what to do
+                    self.unprocessed_input = data[i:]
+                    break
+            elif data[i] == 10:  # \n - newline
                 tc.movePosition(QTextCursor.End)
+                self.device_cursor_position = tc.position() + 1
                 self.setTextCursor(tc)
                 self.insertPlainText(chr(data[i]))
             else:
+                # Char received, with VT100 that should be interpreted
+                # as overwrite the char in front of the cursor
                 tc.deleteChar()
-                self.setTextCursor(tc)
+                self.device_cursor_position = tc.position() + 1
                 self.insertPlainText(chr(data[i]))
+            self.setTextCursor(tc)
             i += 1
+        # Scroll textarea if necessary to see cursor
         self.ensureCursorVisible()
 
     def clear(self):
         """
         Clears the text of the REPL.
         """
-        self.setText('')
+        self.setText("")
 
     def set_font_size(self, new_size=DEFAULT_FONT_SIZE):
         """
@@ -301,19 +471,17 @@ class MicroPythonREPLPane(QTextEdit):
         Send commands to the REPL via raw mode.
         """
         raw_on = [  # Sequence of commands to get into raw mode.
-            b'\x02',
-            b'\r\x03',
-            b'\r\x03',
-            b'\r\x03',
-            b'\r\x01',
+            b"\x02",
+            b"\r\x03",
+            b"\r\x03",
+            b"\r\x03",
+            b"\r\x01",
         ]
-        newline = [b'print("\\n")\r', ]
-        commands = [c.encode('utf-8') + b'\r' for c in commands]
-        commands.append(b'\r')
-        commands.append(b'\x04')
-        raw_off = [
-            b'\x02',
-        ]
+        newline = [b'print("\\n")\r']
+        commands = [c.encode("utf-8") + b"\r" for c in commands]
+        commands.append(b"\r")
+        commands.append(b"\x04")
+        raw_off = [b"\x02"]
         command_sequence = raw_on + newline + commands + raw_off
         logger.info(command_sequence)
         self.execute(command_sequence)
@@ -325,8 +493,8 @@ class MicroPythonREPLPane(QTextEdit):
         """
         if commands:
             command = commands[0]
-            logger.info('Sending command {}'.format(command))
-            self.serial.write(command)
+            logger.info("Sending command {}".format(command))
+            self.send(command)
             remainder = commands[1:]
             remaining_task = lambda commands=remainder: self.execute(commands)
             QTimer.singleShot(2, remaining_task)
@@ -336,6 +504,7 @@ class MuFileList(QListWidget):
     """
     Contains shared methods for the two types of file listing used in Mu.
     """
+
     disable = pyqtSignal()
     list_files = pyqtSignal()
     set_message = pyqtSignal(str)
@@ -353,7 +522,6 @@ class MuFileList(QListWidget):
         msg.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
         return msg.exec_() == QMessageBox.Ok
 
-
 class MicroPythonDeviceFileList(MuFileList):
     """
     Represents a list of files on a MicroPython device.
@@ -361,7 +529,8 @@ class MicroPythonDeviceFileList(MuFileList):
 
     put = pyqtSignal(str)
     delete = pyqtSignal(str)
-
+    if not microfs.BOARD == 'microbit':
+        run = pyqtSignal(str)
     def __init__(self, home):
         super().__init__()
         self.home = home
@@ -370,13 +539,18 @@ class MicroPythonDeviceFileList(MuFileList):
     def dropEvent(self, event):
         source = event.source()
         if isinstance(source, LocalFileList):
-            file_exists = self.findItems(source.currentItem().text(),
-                                         Qt.MatchExactly)
-            if not file_exists or \
-                    file_exists and self.show_confirm_overwrite_dialog():
+            file_exists = self.findItems(
+                source.currentItem().text(), Qt.MatchExactly
+            )
+            if (
+                not file_exists
+                or file_exists
+                and self.show_confirm_overwrite_dialog()
+            ):
                 self.disable.emit()
-                local_filename = os.path.join(self.home,
-                                              source.currentItem().text())
+                local_filename = os.path.join(
+                    self.home, source.currentItem().text()
+                )
                 msg = _("Copying '{}' to micro:bit.").format(local_filename)
                 logger.info(msg)
                 self.set_message.emit(msg)
@@ -407,12 +581,12 @@ class MicroPythonDeviceFileList(MuFileList):
         """
         Fired when the delete event is completed for the given filename.
         """
-        msg = _("'{}' successfully deleted from micro:bit.").\
-            format(microbit_file)
+        msg = _("'{}' successfully deleted from micro:bit.").format(
+            microbit_file
+        )
         self.set_message.emit(msg)
         self.list_files.emit()
-
-
+               
 class LocalFileList(MuFileList):
     """
     Represents a list of files in the Mu directory on the local machine.
@@ -429,17 +603,20 @@ class LocalFileList(MuFileList):
     def dropEvent(self, event):
         source = event.source()
         if isinstance(source, MicroPythonDeviceFileList):
-            file_exists = self.findItems(source.currentItem().text(),
-                                         Qt.MatchExactly)
-            if not file_exists or \
-                    file_exists and self.show_confirm_overwrite_dialog():
+            file_exists = self.findItems(
+                source.currentItem().text(), Qt.MatchExactly
+            )
+            if (
+                not file_exists
+                or file_exists
+                and self.show_confirm_overwrite_dialog()
+            ):
                 self.disable.emit()
                 microbit_filename = source.currentItem().text()
-                local_filename = os.path.join(self.home,
-                                              microbit_filename)
-                msg = _("Getting '{}' from micro:bit. "
-                        "Copying to '{}'.").format(microbit_filename,
-                                                   local_filename)
+                local_filename = os.path.join(self.home, microbit_filename)
+                msg = _(
+                    "Getting '{}' from micro:bit. " "Copying to '{}'."
+                ).format(microbit_filename, local_filename)
                 logger.info(msg)
                 self.set_message.emit(msg)
                 self.get.emit(microbit_filename, local_filename)
@@ -448,8 +625,9 @@ class LocalFileList(MuFileList):
         """
         Fired when the get event is completed for the given filename.
         """
-        msg = _("Successfully copied '{}' "
-                "from the micro:bit to your computer.").format(microbit_file)
+        msg = _(
+            "Successfully copied '{}' " "from the micro:bit to your computer."
+        ).format(microbit_file)
         self.set_message.emit(msg)
         self.list_files.emit()
 
@@ -460,7 +638,7 @@ class LocalFileList(MuFileList):
         ext = os.path.splitext(local_filename)[1].lower()
         open_internal_action = None
         # Mu micro:bit mode only handles .py & .hex
-        if ext == '.py' or ext == '.hex':
+        if ext == ".py" or ext == ".hex":
             open_internal_action = menu.addAction(_("Open in Mu"))
         # Open outside Mu (things get meta if Mu is the default application)
         open_action = menu.addAction(_("Open"))
@@ -493,7 +671,6 @@ class FileSystemPane(QFrame):
     set_warning = pyqtSignal(str)
     list_files = pyqtSignal()
     open_file = pyqtSignal(str)
-
     def __init__(self, home):
         super().__init__()
         self.home = home
@@ -509,9 +686,9 @@ class FileSystemPane(QFrame):
         layout = QGridLayout()
         self.setLayout(layout)
         microbit_label = QLabel()
-        microbit_label.setText(_('Files on your device:'))
+        microbit_label.setText(_("Files on your device: " + microfs.BOARD))
         local_label = QLabel()
-        local_label.setText(_('Files on your computer:'))
+        local_label.setText(_("Files on " + home))#local_label.setText(_("Files on your computer:"))
         self.microbit_label = microbit_label
         self.local_label = local_label
         self.microbit_fs = microbit_fs
@@ -568,8 +745,11 @@ class FileSystemPane(QFrame):
         self.local_fs.clear()
         for f in microbit_files:
             self.microbit_fs.addItem(f)
-        local_files = [f for f in os.listdir(self.home)
-                       if os.path.isfile(os.path.join(self.home, f))]
+        local_files = [
+            f
+            for f in os.listdir(self.home)
+            if os.path.isfile(os.path.join(self.home, f))
+        ]
         local_files.sort()
         for f in local_files:
             self.local_fs.addItem(f)
@@ -579,36 +759,52 @@ class FileSystemPane(QFrame):
         """
         Fired when listing files fails.
         """
-        self.show_warning(_("There was a problem getting the list of files on "
-                            "the device. Please check Mu's logs for "
-                            "technical information. Alternatively, try "
-                            "unplugging/plugging-in your device and/or "
-                            "restarting Mu."))
+        self.show_warning(
+            _(
+                "There was a problem getting the list of files on "
+                "the device. Please check Mu's logs for "
+                "technical information. Alternatively, try "
+                "unplugging/plugging-in your device and/or "
+                "restarting Mu."
+            )
+        )
         self.disable()
 
     def on_put_fail(self, filename):
         """
         Fired when the referenced file cannot be copied onto the device.
         """
-        self.show_warning(_("There was a problem copying the file '{}' onto "
-                            "the device. Please check Mu's logs for "
-                            "more information.").format(filename))
+        self.show_warning(
+            _(
+                "There was a problem copying the file '{}' onto "
+                "the device. Please check Mu's logs for "
+                "more information."
+            ).format(filename)
+        )
 
     def on_delete_fail(self, filename):
         """
         Fired when a deletion on the device for the given file failed.
         """
-        self.show_warning(_("There was a problem deleting '{}' from the "
-                            "device. Please check Mu's logs for "
-                            "more information.").format(filename))
+        self.show_warning(
+            _(
+                "There was a problem deleting '{}' from the "
+                "device. Please check Mu's logs for "
+                "more information."
+            ).format(filename)
+        )
 
     def on_get_fail(self, filename):
         """
         Fired when getting the referenced file on the device failed.
         """
-        self.show_warning(_("There was a problem getting '{}' from the "
-                            "device. Please check Mu's logs for "
-                            "more information.").format(filename))
+        self.show_warning(
+            _(
+                "There was a problem getting '{}' from the "
+                "device. Please check Mu's logs for "
+                "more information."
+            ).format(filename)
+        )
 
     def set_theme(self, theme):
         pass
@@ -647,17 +843,25 @@ class PythonProcessPane(QTextEdit):
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self.context_menu)
         self.running = False  # Flag to show the child process is running.
-        self.setObjectName('PythonRunner')
+        self.setObjectName("PythonRunner")
         self.process = None  # Will eventually reference the running process.
         self.input_history = []  # history of inputs entered in this session.
         self.start_of_current_line = 0  # start position of the input line.
         self.history_position = 0  # current position when navigation history.
-        self.stdout_buffer = b''  # contains non-decoded bytes from stdout.
+        self.stdout_buffer = b""  # contains non-decoded bytes from stdout.
         self.reading_stdout = False  # flag showing if already reading stdout.
 
-    def start_process(self, script_name, working_directory, interactive=True,
-                      debugger=False, command_args=None, envars=None,
-                      runner=None, python_args=None):
+    def start_process(
+        self,
+        script_name,
+        working_directory,
+        interactive=True,
+        debugger=False,
+        command_args=None,
+        envars=None,
+        runner=None,
+        python_args=None,
+    ):
         """
         Start the child Python process.
 
@@ -688,27 +892,27 @@ class PythonProcessPane(QTextEdit):
         self.script = ""
         if script_name:
             self.script = os.path.abspath(os.path.normcase(script_name))
-        logger.info('Running script: {}'.format(self.script))
+        logger.info("Running script: {}".format(self.script))
         if interactive:
-            logger.info('Running with interactive mode.')
+            logger.info("Running with interactive mode.")
         if command_args is None:
             command_args = []
-        logger.info('Command args: {}'.format(command_args))
+        logger.info("Command args: {}".format(command_args))
         self.process = QProcess(self)
         self.process.setProcessChannelMode(QProcess.MergedChannels)
         # Force buffers to flush immediately.
         env = QProcessEnvironment.systemEnvironment()
-        env.insert('PYTHONUNBUFFERED', '1')
-        env.insert('PYTHONIOENCODING', 'utf-8')
-        if sys.platform == 'darwin':
+        env.insert("PYTHONUNBUFFERED", "1")
+        env.insert("PYTHONIOENCODING", "utf-8")
+        if sys.platform == "darwin":
             # Ensure the correct encoding is set for the environment. If the
             # following two lines are not set, then Flask will complain about
             # Python 3 being misconfigured to use ASCII encoding.
             # See: https://click.palletsprojects.com/en/7.x/python3/
             encoding = "{}.utf-8".format(language_code)
-            env.insert('LC_ALL', encoding)
-            env.insert('LANG', encoding)
-        if sys.platform == 'win32' and 'pythonw.exe' in sys.executable:
+            env.insert("LC_ALL", encoding)
+            env.insert("LANG", encoding)
+        if sys.platform == "win32" and "pythonw.exe" in sys.executable:
             # On Windows, if installed via NSIS then Python is always run in
             # isolated mode via pythonw.exe so none of the expected directories
             # are on sys.path. To mitigate, Mu attempts to drop a mu.pth file
@@ -721,53 +925,57 @@ class PythonProcessPane(QTextEdit):
                     # Ensure the USER_SITE directory exists.
                     os.makedirs(site.getusersitepackages(), exist_ok=True)
                     site_path = site.USER_SITE
-                    path_file = os.path.join(site_path, 'mu.pth')
-                    logger.info('Python paths set via {}'.format(path_file))
+                    path_file = os.path.join(site_path, "mu.pth")
+                    logger.info("Python paths set via {}".format(path_file))
                     # Copy current Python paths. Use a set to avoid
                     # duplications.
                     paths_to_use = set([os.path.normcase(p) for p in sys.path])
                     # Add Mu's working directory.
                     paths_to_use.add(os.path.normcase(working_directory))
                     # Add the directory containing the script.
-                    paths_to_use.add(os.path.normcase(
-                        os.path.dirname(self.script)))
+                    paths_to_use.add(
+                        os.path.normcase(os.path.dirname(self.script))
+                    )
                     # Dropping a mu.pth file containing the paths_to_use
                     # into USER_SITE will add such paths to sys.path in the
                     # child process.
-                    with open(path_file, 'w') as mu_pth:
+                    with open(path_file, "w") as mu_pth:
                         for p in paths_to_use:
-                            mu_pth.write(p + '\n')
+                            mu_pth.write(p + "\n")
                 else:
-                    logger.info("Unable to set Python paths."
-                                " Python's USER_SITE not enabled."
-                                " Check configuration with administrator.")
+                    logger.info(
+                        "Unable to set Python paths."
+                        " Python's USER_SITE not enabled."
+                        " Check configuration with administrator."
+                    )
             except Exception as ex:
                 # Log all possible errors and allow Mu to continue. This is a
                 # "best effort" attempt to add the correct paths to the child
                 # process, but sometimes configuration by sys-admins may cause
                 # this to fail.
-                logger.error('Could not set Python paths with mu.pth file.')
+                logger.error("Could not set Python paths with mu.pth file.")
                 logger.error(ex)
-        if 'PYTHONPATH' not in envars:
-            envars.append(('PYTHONPATH', os.pathsep.join(sys.path)))
+        if "PYTHONPATH" not in envars:
+            envars.append(("PYTHONPATH", os.pathsep.join(sys.path)))
         if envars:
-            logger.info('Running with environment variables: '
-                        '{}'.format(envars))
+            logger.info(
+                "Running with environment variables: " "{}".format(envars)
+            )
             for name, value in envars:
                 env.insert(name, value)
-        logger.info('Working directory: {}'.format(working_directory))
+        logger.info("Working directory: {}".format(working_directory))
         self.process.setWorkingDirectory(working_directory)
         self.process.setProcessEnvironment(env)
         self.process.readyRead.connect(self.try_read_from_stdout)
         self.process.finished.connect(self.finished)
-        logger.info('Python path: {}'.format(sys.path))
+        logger.info("Python path: {}".format(sys.path))
         if debugger:
             # Start the mu-debug runner for the script.
-            parent_dir = os.path.join(os.path.dirname(__file__), '..')
+            parent_dir = os.path.join(os.path.dirname(__file__), "..")
             mu_dir = os.path.abspath(parent_dir)
-            runner = os.path.join(mu_dir, 'mu-debug.py')
+            runner = os.path.join(mu_dir, "mu-debug.py")
             python_exec = sys.executable
-            args = [runner, self.script, ] + command_args
+            args = [runner, self.script] + command_args
             self.process.start(python_exec, args)
         else:
             if runner:
@@ -780,10 +988,10 @@ class PythonProcessPane(QTextEdit):
             if self.script:
                 if interactive:
                     # Start the script in interactive Python mode.
-                    args = ['-i', self.script, ] + command_args
+                    args = ["-i", self.script] + command_args
                 else:
                     # Just run the command with no additional flags.
-                    args = [self.script, ] + command_args
+                    args = [self.script] + command_args
             if python_args:
                 args = python_args + args
             logger.info("Runner: {}".format(python_exec))
@@ -798,8 +1006,8 @@ class PythonProcessPane(QTextEdit):
         self.running = False
         cursor = self.textCursor()
         cursor.movePosition(cursor.End)
-        cursor.insertText('\n\n---------- FINISHED ----------\n')
-        msg = 'exit code: {} status: {}'.format(code, status)
+        cursor.insertText("\n\n---------- FINISHED ----------\n")
+        msg = "exit code: {} status: {}".format(code, status)
         cursor.insertText(msg)
         cursor.movePosition(QTextCursor.End)
         self.setTextCursor(cursor)
@@ -810,7 +1018,7 @@ class PythonProcessPane(QTextEdit):
         Creates custom context menu with just copy and paste.
         """
         menu = QMenu(self)
-        if platform.system() == 'Darwin':
+        if platform.system() == "Darwin":
             copy_keys = QKeySequence(Qt.CTRL + Qt.Key_C)
             paste_keys = QKeySequence(Qt.CTRL + Qt.Key_V)
         else:
@@ -827,7 +1035,7 @@ class PythonProcessPane(QTextEdit):
         clipboard = QApplication.clipboard()
         if clipboard and clipboard.text():
             # normalize for Windows line-ends.
-            text = '\n'.join(clipboard.text().splitlines())
+            text = "\n".join(clipboard.text().splitlines())
             if text:
                 self.parse_paste(text)
 
@@ -846,7 +1054,7 @@ class PythonProcessPane(QTextEdit):
         character = text[0]  # the current character to process.
         remainder = text[1:]  # remaining characters to process in the future.
         if character.isprintable() or character in string.printable:
-            if character == '\n' or character == '\r':
+            if character == "\n" or character == "\r":
                 self.parse_input(Qt.Key_Enter, character, None)
             else:
                 self.parse_input(None, character, None)
@@ -897,13 +1105,14 @@ class PythonProcessPane(QTextEdit):
         of the input, and modifiers are the control keys (shift, CTRL, META,
         etc) also used.
         """
-        msg = b''  # Eventually to be inserted into the pane at the cursor.
+        msg = b""  # Eventually to be inserted into the pane at the cursor.
         if key == Qt.Key_Enter or key == Qt.Key_Return:
-            msg = b'\n'
-        elif (platform.system() == 'Darwin' and
-                modifiers == Qt.MetaModifier) or \
-             (platform.system() != 'Darwin' and
-                modifiers == Qt.ControlModifier):
+            msg = b"\n"
+        elif (
+            platform.system() == "Darwin" and modifiers == Qt.MetaModifier
+        ) or (
+            platform.system() != "Darwin" and modifiers == Qt.ControlModifier
+        ):
             # Handle CTRL-C and CTRL-D
             if self.process and self.running:
                 pid = self.process.processId()
@@ -919,7 +1128,7 @@ class PythonProcessPane(QTextEdit):
                 if halt_flag:
                     # Clean up from kill signal.
                     self.process.readAll()  # Discard queued output.
-                    self.stdout_buffer = b''
+                    self.stdout_buffer = b""
                     # Schedule update of the UI after the process halts (in
                     # next iteration of the event loop).
                     QTimer.singleShot(1, self.on_process_halt)
@@ -948,9 +1157,9 @@ class PythonProcessPane(QTextEdit):
             cursor = self.textCursor()
             cursor.movePosition(QTextCursor.End)
             self.setTextCursor(cursor)
-        elif (modifiers == Qt.ControlModifier | Qt.ShiftModifier) or \
-                (platform.system() == 'Darwin' and
-                    modifiers == Qt.ControlModifier):
+        elif (modifiers == Qt.ControlModifier | Qt.ShiftModifier) or (
+            platform.system() == "Darwin" and modifiers == Qt.ControlModifier
+        ):
             # Command-key on Mac, Ctrl-Shift on Win/Lin
             if key == Qt.Key_C:
                 self.copy()
@@ -959,7 +1168,7 @@ class PythonProcessPane(QTextEdit):
         elif text.isprintable():
             # If the key is for a printable character then add it to the
             # active buffer and display it.
-            msg = bytes(text, 'utf8')
+            msg = bytes(text, "utf8")
         if key == Qt.Key_Backspace:
             self.backspace()
         if key == Qt.Key_Delete:
@@ -974,10 +1183,10 @@ class PythonProcessPane(QTextEdit):
             self.insert(msg)
             # Then write line to std_in and add to history
             content = self.toPlainText()
-            line = content[self.start_of_current_line:].encode('utf-8')
+            line = content[self.start_of_current_line :].encode("utf-8")
             self.write_to_stdin(line)
             if line.strip():
-                self.input_history.append(line.replace(b'\n', b''))
+                self.input_history.append(line.replace(b"\n", b""))
             self.history_position = 0
             self.set_start_of_current_line()
         elif not self.isReadOnly() and msg:
@@ -1044,7 +1253,7 @@ class PythonProcessPane(QTextEdit):
                 self.append(data)
                 self.on_append_text.emit(data)
                 self.set_start_of_current_line()
-                self.stdout_buffer = b''
+                self.stdout_buffer = b""
             except UnicodeDecodeError:
                 self.stdout_buffer = data
             QTimer.singleShot(2, self.read_from_stdout)
@@ -1064,7 +1273,7 @@ class PythonProcessPane(QTextEdit):
         """
         cursor = self.textCursor()
         cursor.movePosition(QTextCursor.End)
-        cursor.insertText(msg.decode('utf-8'))
+        cursor.insertText(msg.decode("utf-8"))
         cursor.movePosition(QTextCursor.End)
         self.setTextCursor(cursor)
 
@@ -1075,7 +1284,7 @@ class PythonProcessPane(QTextEdit):
         cursor = self.textCursor()
         if cursor.position() < self.start_of_current_line:
             cursor.movePosition(QTextCursor.End)
-        cursor.insertText(msg.decode('utf-8'))
+        cursor.insertText(msg.decode("utf-8"))
         self.setTextCursor(cursor)
 
     def backspace(self):
@@ -1154,8 +1363,11 @@ class DebugInspector(QTreeView):
         """
         Sets the font size for all the textual elements in this pane.
         """
-        stylesheet = ("QWidget{font-size: " + str(new_size) +
-                      "pt; font-family: Monospace;}")
+        stylesheet = (
+            "QWidget{font-size: "
+            + str(new_size)
+            + "pt; font-family: Monospace;}"
+        )
         self.setStyleSheet(stylesheet)
 
     def set_zoom(self, size):
@@ -1185,16 +1397,16 @@ class PlotterPane(QChartView):
         self.input_buffer = []
         # Holds the raw actionable data detected while plotting.
         self.raw_data = []
-        self.setObjectName('plotterpane')
+        self.setObjectName("plotterpane")
         self.max_x = 100  # Maximum value along x axis
         self.max_y = 1000  # Maximum value +/- along y axis
         self.flooded = False  # Flag to indicate if data flooding is happening.
 
         # Holds deques for each slot of incoming data (assumes 1 to start with)
-        self.data = [deque([0] * self.max_x), ]
+        self.data = [deque([0] * self.max_x)]
         # Holds line series for each slot of incoming data (assumes 1 to start
         # with).
-        self.series = [QLineSeries(), ]
+        self.series = [QLineSeries()]
 
         # Ranges used for the Y axis (up to 1000, after which we just double
         # the range).
@@ -1230,16 +1442,16 @@ class PlotterPane(QChartView):
             self.flooded = True
             self.data_flood.emit()
             return
-        data = data.replace(b'\r\n', b'\n')
+        data = data.replace(b"\r\n", b"\n")
         self.input_buffer.append(data)
         # Check if the data contains a Python tuple, containing numbers, on a
         # single line (i.e. ends with \n).
-        input_bytes = b''.join(self.input_buffer)
-        lines = input_bytes.split(b'\n')
+        input_bytes = b"".join(self.input_buffer)
+        lines = input_bytes.split(b"\n")
         for line in lines:
-            if line.startswith(b'(') and line.endswith(b')'):
+            if line.startswith(b"(") and line.endswith(b")"):
                 # Candidate tuple. Extract the raw bytes into a numeric tuple.
-                raw_values = [val.strip() for val in line[1:-1].split(b',')]
+                raw_values = [val.strip() for val in line[1:-1].split(b",")]
                 numeric_values = []
                 for raw in raw_values:
                     try:
@@ -1333,9 +1545,9 @@ class PlotterPane(QChartView):
         """
         Sets the theme / look for the plotter pane.
         """
-        if theme == 'day':
+        if theme == "day":
             self.chart.setTheme(QChart.ChartThemeLight)
-        elif theme == 'night':
+        elif theme == "night":
             self.chart.setTheme(QChart.ChartThemeDark)
         else:
             self.chart.setTheme(QChart.ChartThemeHighContrast)
