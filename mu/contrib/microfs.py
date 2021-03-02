@@ -2,7 +2,9 @@
 """
 This module contains functions for running remote commands on the BBC micro:bit
 relating to file system based operations.
+
 You may:
+
 * ls - list files on the device. Based on the equivalent Unix command.
 * rm - remove a named file on the device. Based on the Unix command.
 * put - copy a named local file onto the device a la equivalent FTP command.
@@ -18,10 +20,10 @@ import os.path
 from serial.tools.list_ports import comports as list_serial_ports
 from serial import Serial
 
-PY2 = sys.version_info < (3,)
-RAM_TEST = False
 
-BOARD = 'TBD'
+PY2 = sys.version_info < (3,)
+
+
 __all__ = ["ls", "rm", "put", "get", "get_serial"]
 
 
@@ -134,7 +136,7 @@ def execute(commands, serial=None):
         close_serial = True
         time.sleep(0.1)
     result = b""
-    enter_raw_repl(serial) # raw_on(serial)
+    raw_on(serial)
     time.sleep(0.1)
     # Write the actual command and send CTRL-D to evaluate.
     for command in commands:
@@ -169,18 +171,18 @@ def clean_error(err):
             return decoded
     return "There was an error."
 
+
 def ls(serial=None):
     """
     List the files on the micro:bit.
+
     If no serial object is supplied, microfs will attempt to detect the
     connection itself.
+
     Returns a list of the files on the connected device or raises an IOError if
     there's a problem.
     """
-    print('row 180 - before MCU Board  --->' + BOARD)
-    if BOARD == 'TBD': # executed only one time to know the board
-        mcu_board(serial); print('row 182 - after  MCU Board  --->' + BOARD)
-    out, err = execute(["import os", "print(sorted(os.listdir(), key=str.lower))"], serial); out = out.lstrip(b"\n>OK")
+    out, err = execute(["import os", "print(os.listdir())"], serial)
     if err:
         raise IOError(clean_error(err))
     return ast.literal_eval(out.decode("utf-8"))
@@ -268,7 +270,7 @@ def get(filename, target=None, serial=None):
         "while result:\n result = r(32)\n if result:\n  u.write(result)\n",
         "f.close()",
     ]
-    out, err = execute(commands, serial); out = out.lstrip(b"\n>OK")
+    out, err = execute(commands, serial)
     if err:
         raise IOError(clean_error(err))
     # Recombine the bytes while removing "b'" from start and "'" from end.
@@ -369,105 +371,3 @@ def main(argv=None):
     except Exception as ex:
         # The exception of no return. Print exception information.
         print(ex)
-
-def read_until(serial, min_num_bytes, ending, timeout=10, data_consumer=None):
-        data =  serial.read(min_num_bytes)
-        if data_consumer:
-            data_consumer(data)
-        timeout_count = 0
-        while True:
-            if data.endswith(ending):
-                break
-            elif serial.inWaiting() > 0:
-                new_data = serial.read(1)
-                data = data + new_data
-                if data_consumer:
-                    data_consumer(new_data)
-                timeout_count = 0
-            else:
-                timeout_count += 1
-                if timeout is not None and timeout_count >= 100 * timeout:
-                    break
-                time.sleep(0.01)
-        return data
-
-def enter_raw_repl(serial):
-	  
-        print('row 400 enter_raw_repl() -start to measure enter raw repl time'); print(time.localtime())
-        # ctrl-C twice: interrupt any running program
-        serial.write(b'\r\x03') # Send a Control-C / keyboard interrupt.
-        time.sleep(0.1)
-        serial.write(b'\x03')
-        time.sleep(0.1) 
-        # flush input (without relying on serial.flushInput())
-        n = serial.inWaiting()
-        while n > 0:
-            serial.read(n)
-            n = serial.inWaiting()
-                # doubled the VolSh modification - Federico
-        # with this trick we are 100% sure to enter in the raw REPL 
-        # in the last 5th step    
-        # print('2nd step - VolShy')
-        time.sleep(0.5)
-        serial.write(b'\x03')
-        time.sleep(0.1)           # (slight delay before second interrupt
-        serial.write(b'\x03')    
-
-        serial.write(b'\r\x01') # ctrl-A: enter raw REPL
-        #serial.write(b'\x04') # ctrl-D: soft reset
-        # added for ESP32 - start - Stop reading of IDF RAM Test
-        if RAM_TEST == True:
-            data = read_until(serial, 1, b'cpu_start: Pro cpu up.')
-            time.sleep(1); print('RAM test readings stop at -> cpu_start: Pro cpu up.')
-            serial.write(b'\r\x01') # ctrl-A: enter raw REPL
-            
-        # added for ESP32 - end
-        data = read_until(serial, 1, b'raw REPL; CTRL-B to exit')
-        if not data.endswith(b'raw REPL; CTRL-B to exit'):
-            print(data) ; print(time.localtime())
-            raise IOError('could not enter raw repl')
-        
-        serial.write(b'\x04') # ctrl-D: soft reset
-        data = read_until(serial, 1, b'soft reboot')
-        if not data.endswith(b'soft reboot'):
-            print(data)
-            raise IOError('could not enter raw repl')
-        # By splitting this into 2 reads, it allows boot.py to print stuff,
-        # which will show up after the soft reboot and before the raw REPL.
-        # Modification from original pyboard.py below:
-        #   Add a small delay and send Ctrl-C twice after soft reboot to ensure
-        #   any main program loop in main.py is interrupted.
-        print('2nd read - small delay and send Ctrl-C twice after soft reboot')
-        time.sleep(0.5)
-        serial.write(b'\x03')   # Send a Control-C / keyboard interrupt.
-        time.sleep(0.2)         # (slight delay before second interrupt
-        serial.write(b'\x03')   # Send a Control-C / keyboard interrupt.
-        # End modification above.
-        data = read_until(serial, 1, b'raw REPL; CTRL-B to exit')
-        print('raw REPL; CTRL-B to exit'); print(time.localtime())
-        if not data.endswith(b'raw REPL; CTRL-B to exit'):
-            print(data)
-            raise IOError('could not enter raw repl')
-
-def mcu_board(serial=None):  # only for trials
-    """    
-    If no serial object is supplied, microfs will attempt to detect the
-    connection itself.
-    Returns a device name or raises an IOError if
-    there's a problem.
-    
-    """
-    
-    global BOARD
-    print('row 453 - MCU Board  --->' + BOARD)
-    out, err =  execute(["import os", "print(os.uname()[0])"], serial)
-    print(" from mcu_board() row 455 - microfs.py"); print(out)
-    # print((out.lstrip(b"\n>OK")).rstrip(b"\r\r\n"))
-    out = (out.lstrip(b"\n>OK")).rstrip(b"\r\r\n")
-    out = out.decode('utf-8')
-    BOARD = out; print('row 459  from microfs.py  mcu_board(serial=None) - debug fm -MCU Board --->' + BOARD)
-    print(" row 460 from microfs.ls()  - debug fm "); print(out); print(BOARD); 
-    if err:
-        raise IOError(clean_error(err))
-    #return ast.literal_eval(out.decode("utf-8"))
-    return BOARD

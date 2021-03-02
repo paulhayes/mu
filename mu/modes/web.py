@@ -24,6 +24,7 @@ from mu.modes.base import BaseMode
 from mu.modes.api import PYTHON3_APIS, SHARED_APIS, FLASK_APIS
 from mu.resources import load_icon
 from mu.logic import read_and_decode
+from ..virtual_environment import venv
 
 
 logger = logging.getLogger(__name__)
@@ -55,9 +56,10 @@ class WebMode(BaseMode):
     Represents the functionality required by the WWW mode.
     """
 
-    name = _('Web')
+    name = _("Web")
+    short_name = "web"
     description = _('Build simple websites with the "Flask" web framework.')
-    icon = 'web'
+    icon = "web"
     runner = None
     save_timeout = 0  # User has to explicitly save web application.
     file_extensions = ["css", "html"]
@@ -70,40 +72,42 @@ class WebMode(BaseMode):
         """
         return [
             {
-                'name': 'run',
-                'display_name': _('Run'),
-                'description': _('Run the web server.'),
-                'handler': self.run_toggle,
-                'shortcut': 'F5',
+                "name": "run",
+                "display_name": _("Run"),
+                "description": _("Run the web server."),
+                "handler": self.run_toggle,
+                "shortcut": "F5",
             },
             {
-                'name': 'browse',
-                'display_name': _('Browse'),
-                'description': _('Open your website in a browser.'),
-                'handler': self.browse,
-                'shortcut': 'Ctrl+Shift+B',
+                "name": "browse",
+                "display_name": _("Browse"),
+                "description": _("Open your website in a browser."),
+                "handler": self.browse,
+                "shortcut": "Ctrl+Shift+B",
             },
             {
-                'name': 'views',
-                'display_name': _('Templates'),
-                'description': _('Load HTML templates used by your website.'),
-                'handler': self.load_views,
-                'shortcut': 'Ctrl+Shift+V',
+                "name": "templates",
+                "display_name": _("Templates"),
+                "description": _("Load HTML templates used by your website."),
+                "handler": self.load_templates,
+                "shortcut": "Ctrl+Shift+T",
             },
             {
-                'name': 'css',
-                'display_name': _('CSS'),
-                'description': _('Load CSS files used by your website.'),
-                'handler': self.load_css,
-                'shortcut': 'Ctrl+Shift+C',
+                "name": "css",
+                "display_name": _("CSS"),
+                "description": _("Load CSS files used by your website."),
+                "handler": self.load_css,
+                "shortcut": "Ctrl+Shift+C",
             },
             {
-                'name': 'static',
-                'display_name': _('Images'),
-                'description': _('Open the directory containing images used '
-                                 'by your website.'),
-                'handler': self.show_images,
-                'shortcut': 'Ctrl+Shift+I',
+                "name": "static",
+                "display_name": _("Images"),
+                "description": _(
+                    "Open the directory containing images used "
+                    "by your website."
+                ),
+                "handler": self.show_images,
+                "shortcut": "Ctrl+Shift+I",
             },
         ]
 
@@ -120,18 +124,18 @@ class WebMode(BaseMode):
         """
         if self.runner:
             self.stop_server()
-            run_slot = self.view.button_bar.slots['run']
-            run_slot.setIcon(load_icon('run'))
-            run_slot.setText(_('Run'))
-            run_slot.setToolTip(_('Run the web server.'))
+            run_slot = self.view.button_bar.slots["run"]
+            run_slot.setIcon(load_icon("run"))
+            run_slot.setText(_("Run"))
+            run_slot.setToolTip(_("Run the web server."))
             self.set_buttons(modes=True)
         else:
             self.start_server()
             if self.runner:
-                run_slot = self.view.button_bar.slots['run']
-                run_slot.setIcon(load_icon('stop'))
-                run_slot.setText(_('Stop'))
-                run_slot.setToolTip(_('Stop the web server.'))
+                run_slot = self.view.button_bar.slots["run"]
+                run_slot.setIcon(load_icon("stop"))
+                run_slot.setText(_("Stop"))
+                run_slot.setToolTip(_("Stop the web server."))
                 self.set_buttons(modes=False)
 
     def start_server(self):
@@ -141,7 +145,7 @@ class WebMode(BaseMode):
         # Grab the Python file.
         tab = self.view.current_tab
         if tab is None:
-            logger.debug('There is no active text editor.')
+            logger.debug("There is no active text editor.")
             self.stop_server()
             return
         if tab.path is None:
@@ -151,10 +155,12 @@ class WebMode(BaseMode):
             # Check it's a Python file.
             if not tab.path.lower().endswith(".py"):
                 # Oops... show a helpful message and stop.
-                msg = _('This is not a Python file!')
-                info = _("Mu is only able to serve a Python file. Please make "
-                         "sure the current tab in Mu is the one for your web "
-                         "application and then try again.")
+                msg = _("This is not a Python file!")
+                info = _(
+                    "Mu is only able to serve a Python file. Please make "
+                    "sure the current tab in Mu is the one for your web "
+                    "application and then try again."
+                )
                 self.view.show_message(msg, info)
                 self.stop_server()
                 return
@@ -165,21 +171,26 @@ class WebMode(BaseMode):
             envars = self.editor.envars
             envars.append(("FLASK_APP", os.path.basename(tab.path)))
             envars.append(("FLASK_ENV", "development"))
+            envars.append(("LC_ALL", "en_GB.UTF8"))
+            envars.append(("LANG", "en_GB.UTF8"))
             args = ["-m", "flask", "run"]
             cwd = os.path.dirname(tab.path)
-            self.runner = self.view.add_python3_runner("",
-                                                       cwd,
-                                                       interactive=False,
-                                                       envars=envars,
-                                                       python_args=args)
-            logger.debug('Starting Flask app.')
+            self.runner = self.view.add_python3_runner(
+                venv.interpreter,
+                "",
+                cwd,
+                interactive=False,
+                envars=envars,
+                python_args=args,
+            )
+            logger.debug("Starting Flask app.")
             self.runner.process.waitForStarted()
 
     def stop_server(self):
         """
         Stop the currently running web server.
         """
-        logger.debug('Stopping Flask app.')
+        logger.debug("Stopping Flask app.")
         if self.runner:
             try:
                 pid = self.runner.process.processId()
@@ -206,16 +217,16 @@ class WebMode(BaseMode):
         """
         return read_and_decode(path)
 
-    def load_views(self, event):
+    def load_templates(self, event):
         """
         Open the directory containing the HTML template views used by Flask.
 
         This should open the host OS's file system explorer so users can drag
         new files into the opened folder.
         """
-        views_dir = os.path.join(self.workspace_dir(), 'templates')
-        logger.info(views_dir)
-        self.editor.load(default_path=views_dir)
+        templates_dir = self.assets_dir("templates")
+        logger.info(templates_dir)
+        self.editor.load(default_path=templates_dir)
 
     def load_css(self, event):
         """
@@ -224,7 +235,8 @@ class WebMode(BaseMode):
         This should open the host OS's file system explorer so users can drag
         new files into the opened folder.
         """
-        css_dir = os.path.join(self.workspace_dir(), 'static', 'css')
+        css_path = os.path.join("static", "css")
+        css_dir = self.assets_dir(css_path)
         logger.info(css_dir)
         self.editor.load(default_path=css_dir)
 
@@ -235,7 +247,8 @@ class WebMode(BaseMode):
         This should open the host OS's file system explorer so users can drag
         new files into the opened folder.
         """
-        img_dir = os.path.join(self.workspace_dir(), 'static', 'img')
+        img_path = os.path.join("static", "img")
+        img_dir = self.assets_dir(img_path)
         logger.info(img_dir)
         self.view.open_directory_from_os(img_dir)
 
@@ -250,8 +263,10 @@ class WebMode(BaseMode):
             webbrowser.open(url)
         else:
             logger.info("Attempted to load website, but server not running.")
-            msg = _('Cannot Open Website - Server not Running.')
-            info = _("You must have the local web server running in order to "
-                     "view your website in a browser. Click on the 'Run' "
-                     "button to start the server and then try again.")
+            msg = _("Cannot Open Website - Server not Running.")
+            info = _(
+                "You must have the local web server running in order to "
+                "view your website in a browser. Click on the 'Run' "
+                "button to start the server and then try again."
+            )
             self.view.show_message(msg, info)

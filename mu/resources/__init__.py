@@ -18,13 +18,13 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 """
 from pkg_resources import resource_filename, resource_string
-from PyQt5.QtGui import QPixmap, QIcon
+from PyQt5.QtGui import QPixmap, QIcon, QMovie
 from PyQt5.QtCore import QDir
 
 
 # The following lines add the images and css directories to the search path.
-QDir.addSearchPath('images', resource_filename(__name__, 'images'))
-QDir.addSearchPath('css', resource_filename(__name__, 'css'))
+QDir.addSearchPath("images", resource_filename(__name__, "images"))
+QDir.addSearchPath("css", resource_filename(__name__, "css"))
 
 
 def path(name, resource_dir="images/"):
@@ -42,9 +42,14 @@ def load_pixmap(name):
     return QPixmap(path(name))
 
 
+def load_movie(name):
+    """Load an animated GIF from the resources directory."""
+    return QMovie(path(name))
+
+
 def load_stylesheet(name):
     """Load a CSS stylesheet from the resources directory."""
-    return resource_string(__name__, "css/" + name).decode('utf8')
+    return resource_string(__name__, "css/" + name).decode("utf8")
 
 
 def load_font_data(name):
