@@ -33,9 +33,9 @@ clean:
 	rm -rf lib
 	rm -rf *.mp4
 	rm -rf .git/avatar/*
-	find . \( -name '*.py[co]' -o -name dropin.cache \) -delete
-	find . \( -name '*.bak' -o -name dropin.cache \) -delete
-	find . \( -name '*.tgz' -o -name dropin.cache \) -delete
+	find . \( -name '*.py[co]' -o -name dropin.cache \) -exec rm {} \;
+	find . \( -name '*.bak' -o -name dropin.cache \) -exec rm {} \;
+	find . \( -name '*.tgz' -o -name dropin.cache \) -exec rm {} \;
 	find . | grep -E "(__pycache__)" | xargs rm -rf
 
 run: clean
