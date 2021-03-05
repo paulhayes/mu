@@ -34,6 +34,7 @@ class ESPMode(MicroPythonMode):
 
     name = _("ESP and WinnerMicro MicroPython")
     short_name = "esp"
+    board_name = "ESP8266/ESP32/W600"
     description = _("Write MicroPython on ESP8266/ESP32 and W600-PICO boards.")
     icon = "esp"
     fs = None
@@ -80,9 +81,7 @@ class ESPMode(MicroPythonMode):
             {
                 "name": "repl",
                 "display_name": _("REPL"),
-                "description": _(
-                    "Use the REPL to live-code on the " "ESP8266/ESP32."
-                ),
+                "description": _("Use the REPL to live-code on the " "ESP8266/ESP32."),
                 "handler": self.toggle_repl,
                 "shortcut": "Ctrl+Shift+I",
             },
@@ -138,9 +137,7 @@ class ESPMode(MicroPythonMode):
             elif not (self.repl or self.plotter):
                 self.set_buttons(files=True)
         else:
-            message = _(
-                "The plotter and file system cannot work at the same " "time."
-            )
+            message = _("The plotter and file system cannot work at the same " "time.")
             information = _(
                 "The plotter and file system both use the same "
                 "USB serial connection. Only one can be active "
@@ -190,8 +187,7 @@ class ESPMode(MicroPythonMode):
         """
         if self.repl:
             message = _(
-                "File system cannot work at the same time as the "
-                "REPL or plotter."
+                "File system cannot work at the same time as the " "REPL or plotter."
             )
             information = _(
                 "The file system and the REPL and plotter "
@@ -244,7 +240,9 @@ class ESPMode(MicroPythonMode):
         else:
             path = self.workspace_dir()
         self.fs = self.view.add_filesystem(
-            path, self.file_manager, _("ESP board")
+            path,
+            self.file_manager,
+            _("{board_name} board").format(board_name=self.board_name),
         )
         self.fs.set_message.connect(self.editor.show_status_message)
         self.fs.set_warning.connect(self.view.show_message)
