@@ -22,7 +22,7 @@ def test_ESPMode_init():
     editor = mock.MagicMock()
     view = mock.MagicMock()
     esp_mode = ESPMode(editor, view)
-    assert esp_mode.name.startswith("ESP") 
+    assert esp_mode.name.startswith("ESP")
     assert esp_mode.description is not None
     assert esp_mode.icon == "esp"
 
